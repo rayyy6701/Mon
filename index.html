@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ひっぱりハンティング プロトタイプ</title>
+    <title>最高クオリティ ひっぱりアクション プロトタイプ</title>
     <style>
         body {
             margin: 0;
@@ -16,7 +16,8 @@
             overflow: hidden;
         }
         #game-container {
-            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+            border: 2px solid #333;
         }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
@@ -32,22 +33,20 @@
         const CONFIG = {
             WIDTH: 540,
             HEIGHT: 960,
-            BOUNCE: 0.95,          // 跳ね返り係数（1.0で完全弾性衝突）
-            DRAG: 5,               // 空気抵抗（低いほど減速しにくい）
+            BOUNCE: 0.98,          // 跳ね返り係数（1.0に近づくほど勢いが死なない）
+            DRAG: 4,               // 空気抵抗（低いほど減速しにくい）
             MAX_PULL: 150,         // 引っ張り上限距離(px)
             LAUNCH_POWER: 4.5,     // 発射速度倍率
-            STOP_SPEED_THRESHOLD: 10, // この速度以下になったら停止とみなす
+            STOP_SPEED_THRESHOLD: 12, // この速度以下になったら停止とみなす
             
             // 演出関連
             HIT_STOP_DURATION: 60, // ヒットストップの時間 (ミリ秒)
-            SHAKE_INTENSITY: 0.008, // 画面揺れの強さ
-            SHAKE_DURATION: 100,    // 画面揺れの時間 (ミリ秒)
+            SHAKE_INTENSITY: 0.01, // 画面揺れの強さ
+            SHAKE_DURATION: 120,   // 画面揺れの時間 (ミリ秒)
 
-            // ゲームバランス
-            PLAYER_HP: 1000,
-            ENEMY_HP: 5000,
-            DIRECT_DAMAGE: 120,    // 直接ヒット時の基本ダメージ
-            FRIENDLY_COMBO_DAMAGE: 450 // 友情コンボ（レーザー）のダメージ
+            // バランス・ダメージ
+            BASE_DAMAGE: 150,      // 通常衝突時の基本ダメージ
+            COMBO_DAMAGE: 500      // 友情コンボ（レーザー）のダメージ
         };
 
         class GameScene extends Phaser.Scene {
@@ -61,24 +60,24 @@
             }
 
             preload() {
-                // プリミティブ形状をテクスチャとして動的生成（アセット画像不要にするため）
-                this.createCircleTexture('player_main', 24, 0x00aaff, 0xffffff);
-                this.createCircleTexture('player_sub', 24, 0x00ff88, 0xffffff);
-                this.createCircleTexture('enemy', 40, 0xff3333, 0xffbb00);
+                // テクスチャの動的生成（アセット画像不要）
+                this.createCircleTexture('player_main', 24, 0x00aaff, 0xffffff); // 自機（青）
+                this.createCircleTexture('player_sub', 24, 0x00ff88, 0xffffff);  // 仲間（緑）
+                this.createCircleTexture('enemy', 40, 0xff3333, 0xffbb00);      // 敵（赤）
                 this.createParticleTexture();
             }
 
             create() {
-                // 背景の描画
-                this.add.rectangle(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT, 0x1a1a2e).setOrigin(0);
+                // 背景・グリッド
+                this.add.rectangle(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT, 0x121225).setOrigin(0);
                 this.createGridBackground();
 
-                // 物理ワールドの設定（外周の壁を有効化、重力はゼロ）
+                // 物理演算世界の設定
                 this.physics.world.setBounds(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
                 this.physics.world.gravity.set(0, 0);
 
-                // グループ作成
-                this.players = this.physics.add.group({
+                // 全キャラクター用グループの作成
+                this.allCharacters = this.physics.add.group({
                     bounceX: CONFIG.BOUNCE,
                     bounceY: CONFIG.BOUNCE,
                     dragX: CONFIG.DRAG,
@@ -86,57 +85,61 @@
                     collideWorldBounds: true
                 });
 
-                this.enemies = this.physics.add.group({
-                    bounceX: CONFIG.BOUNCE,
-                    bounceY: CONFIG.BOUNCE,
-                    dragX: CONFIG.DRAG,
-                    dragY: CONFIG.DRAG,
-                    collideWorldBounds: true,
-                    immovable: true
-                });
-
-                // グラフィックスの初期化
+                // 各種グラフィックスの初期化
                 this.trajectoryGraphics = this.add.graphics();
                 this.laserGraphics = this.add.graphics().setDepth(10);
 
-                // キャラクターの配置
+                // キャラクターの配置と初期化
                 this.spawnCharacters();
 
-                // 衝突判定の設定
-                this.physics.add.collider(this.players, this.players, this.onPlayerCollide, undefined, this);
-                this.physics.add.collider(this.players, this.enemies, this.onEnemyCollide, undefined, this);
+                // 総当たり衝突判定（すべてのキャラが独立してぶつかり合う）
+                this.physics.add.collider(this.allCharacters, this.allCharacters, this.onHandleCollision, undefined, this);
 
-                // 入力イベントの登録
+                // マウス/タッチイベント
                 this.input.on('pointerdown', this.onDragStart, this);
                 this.input.on('pointermove', this.onDragMove, this);
                 this.input.on('pointerup', this.onDragEnd, this);
 
-                // パーティクル（トレイル・残像用）の生成
+                // 残像トレイルエフェクトの開始
                 this.createPlayerTrails();
             }
 
             update() {
+                // ターン中の全オブジェクトの停止監視
                 if (this.isTurnActive && !this.hitStopping) {
                     this.checkTurnEnd();
                 }
             }
 
             spawnCharacters() {
-                this.currentPlayer = this.players.create(CONFIG.WIDTH / 2, CONFIG.HEIGHT - 150, 'player_main');
+                // 1. 自機
+                this.currentPlayer = this.allCharacters.create(CONFIG.WIDTH / 2, CONFIG.HEIGHT - 150, 'player_main');
                 this.currentPlayer.setCircle(24);
-                
-                this.friendlyPlayer = this.players.create(CONFIG.WIDTH / 2 - 100, CONFIG.HEIGHT - 250, 'player_sub');
+                this.currentPlayer.setData('type', 'player');
+
+                // 2. 独立したもう一人の味方
+                this.friendlyPlayer = this.allCharacters.create(CONFIG.WIDTH / 2 - 120, CONFIG.HEIGHT - 300, 'player_sub');
                 this.friendlyPlayer.setCircle(24);
+                this.friendlyPlayer.setData('type', 'player');
 
-                const enemy = this.enemies.create(CONFIG.WIDTH / 2, 250, 'enemy');
-                enemy.setCircle(40);
-                enemy.setData('hp', CONFIG.ENEMY_HP);
+                // 3. 敵（今回はぶつかったらリアルに動くように固定解除）
+                this.enemy = this.allCharacters.create(CONFIG.WIDTH / 2, 250, 'enemy');
+                this.enemy.setCircle(40);
+                this.enemy.setData('type', 'enemy');
+                this.enemy.setData('maxHp', 5000);
+                this.enemy.setData('hp', 5000);
+                this.enemy.setMass(3); // 敵は少し重くして手応えを出す
 
-                this.updateHpBar(enemy);
+                this.updateHpBar(this.enemy);
             }
 
+            // ==========================================
+            // 引っ張り操作ロジック
+            // ==========================================
             onDragStart(pointer) {
                 if (this.isTurnActive) return;
+
+                // 自機のタップ判定（少し遊びを持たせる）
                 const dist = Phaser.Math.Distance.Between(pointer.x, pointer.y, this.currentPlayer.x, this.currentPlayer.y);
                 if (dist < 60) {
                     this.isDragging = true;
@@ -161,34 +164,26 @@
                 }
 
                 const launchAngle = Phaser.Math.Angle.Between(0, 0, -dx, -dy);
-                
                 const ratio = distance / CONFIG.MAX_PULL;
+                
+                // 引っ張る長さで色を変化（青 ➔ 黄 ➔ 赤）
                 let color = 0x00aaff;
-                if (ratio > 0.7) {
-                    color = 0xff3333;
-                } else if (ratio > 0.3) {
-                    color = 0xffaa00;
-                }
+                if (ratio > 0.7) color = 0xff3333;
+                else if (ratio > 0.3) color = 0xffaa00;
 
                 const startX = this.currentPlayer.x;
                 const startY = this.currentPlayer.y;
                 const endX = startX + Math.cos(launchAngle) * distance;
                 const endY = startY + Math.sin(launchAngle) * distance;
 
+                // ガイドラインと矢印先端の描画
                 this.trajectoryGraphics.lineStyle(6, color, 0.8);
                 this.trajectoryGraphics.lineBetween(startX, startY, endX, endY);
-
                 this.trajectoryGraphics.fillStyle(color, 1);
                 this.trajectoryGraphics.beginPath();
                 this.trajectoryGraphics.moveTo(endX, endY);
-                this.trajectoryGraphics.lineTo(
-                    endX - 15 * Math.cos(launchAngle - Math.PI / 6),
-                    endY - 15 * Math.sin(launchAngle - Math.PI / 6)
-                );
-                this.trajectoryGraphics.lineTo(
-                    endX - 15 * Math.cos(launchAngle + Math.PI / 6),
-                    endY - 15 * Math.sin(launchAngle + Math.PI / 6)
-                );
+                this.trajectoryGraphics.lineTo(endX - 15 * Math.cos(launchAngle - Math.PI / 6), endY - 15 * Math.sin(launchAngle - Math.PI / 6));
+                this.trajectoryGraphics.lineTo(endX - 15 * Math.cos(launchAngle + Math.PI / 6), endY - 15 * Math.sin(launchAngle + Math.PI / 6));
                 this.trajectoryGraphics.closePath();
                 this.trajectoryGraphics.fill();
             }
@@ -200,80 +195,105 @@
 
                 let dx = pointer.x - this.dragStartPoint.x;
                 let dy = pointer.y - this.dragStartPoint.y;
-                let distance = Phaser.Math.Distance.Between(0, 0, dx, dy);
 
-                if (distance > CONFIG.MAX_PULL) {
+                if (Phaser.Math.Distance.Between(0, 0, dx, dy) < 10) return; // 微小なドラッグはキャンセル
+
+                if (Phaser.Math.Distance.Between(0, 0, dx, dy) > CONFIG.MAX_PULL) {
                     const angle = Phaser.Math.Angle.Between(0, 0, dx, dy);
                     dx = Math.cos(angle) * CONFIG.MAX_PULL;
                     dy = Math.sin(angle) * CONFIG.MAX_PULL;
                 }
 
-                if (Phaser.Math.Distance.Between(0, 0, dx, dy) < 10) return;
-
-                const vx = -dx * CONFIG.LAUNCH_POWER;
-                const vy = -dy * CONFIG.LAUNCH_POWER;
-
-                this.currentPlayer.setVelocity(vx, vy);
+                // 物理ベクトルの適用（引っ張りと逆方向へ発射）
+                this.currentPlayer.setVelocity(-dx * CONFIG.LAUNCH_POWER, -dy * CONFIG.LAUNCH_POWER);
                 this.isTurnActive = true;
                 this.hasTriggeredCombo = false;
             }
 
-            onEnemyCollide(playerObj, enemyObj) {
-                const enemy = enemyObj;
-                const player = playerObj;
+            // ==========================================
+            // 総当たり衝突ハンドラー（エフェクトの核心）
+            // ==========================================
+            onHandleCollision(obj1, obj2) {
+                const type1 = obj1.getData('type');
+                const type2 = obj2.getData('type');
 
+                // 1. 味方同士の衝突（友情コンボ発動）
+                if (type1 === 'player' && type2 === 'player') {
+                    if (!this.hasTriggeredCombo) {
+                        this.hasTriggeredCombo = true;
+                        this.triggerLaserCombo();
+                    }
+                }
+                
+                // 2. プレイヤーと敵の衝突（どちらがobj1/obj2でも対応）
+                if ((type1 === 'player' && type2 === 'enemy') || (type1 === 'enemy' && type2 === 'player')) {
+                    const enemyObj = (type1 === 'enemy') ? obj1 : obj2;
+                    const playerObj = (type1 === 'player') ? obj1 : obj2;
+                    
+                    this.processDamage(playerObj, enemyObj);
+                }
+            }
+
+            // 通常衝突ダメージ＆豪華演出
+            processDamage(player, enemy) {
                 if (this.hitStopping) return;
 
-                this.spawnSpark(player.x, player.y);
+                // 火花エフェクトを衝突点の中心に発生
+                const contactX = (player.x + enemy.x) / 2;
+                const contactY = (player.y + enemy.y) / 2;
+                this.spawnSpark(contactX, contactY, 0xffaa00);
 
-                let currentHp = enemy.getData('hp');
-                currentHp -= CONFIG.DIRECT_DAMAGE;
-                enemy.setData('hp', currentHp);
+                // HP減少とポップアップテキスト
+                let hp = enemy.getData('hp');
+                hp -= CONFIG.BASE_DAMAGE;
+                enemy.setData('hp', hp);
                 this.updateHpBar(enemy);
-                this.showDamageText(enemy.x, enemy.y - 30, CONFIG.DIRECT_DAMAGE.toString(), 0xffffff);
+                this.showDamageText(enemy.x, enemy.y - 40, CONFIG.BASE_DAMAGE.toString(), 0xffffff);
 
+                // 最高クオリティ：ヒットストップ & 画面シェイク
                 this.hitStopping = true;
-                const originalVelocity = player.body.velocity.clone();
-                
+                const pVel = player.body.velocity.clone();
+                const eVel = enemy.body.velocity.clone();
+
+                // 一瞬だけ全物理速度をゼロにして停止感を出す
                 player.setVelocity(0, 0);
+                enemy.setVelocity(0, 0);
                 this.physics.world.pause();
 
                 this.cameras.main.shake(CONFIG.SHAKE_DURATION, CONFIG.SHAKE_INTENSITY);
 
                 this.time.delayedCall(CONFIG.HIT_STOP_DURATION, () => {
                     this.physics.world.resume();
-                    player.setVelocity(originalVelocity.x * -CONFIG.BOUNCE, originalVelocity.y * -CONFIG.BOUNCE);
+                    // 物理演算再開時に反発を維持して速度を再適用
+                    player.setVelocity(pVel.x * -CONFIG.BOUNCE, pVel.y * -CONFIG.BOUNCE);
+                    enemy.setVelocity(eVel.x * CONFIG.BOUNCE, eVel.y * CONFIG.BOUNCE);
                     this.hitStopping = false;
                 });
             }
 
-            onPlayerCollide(player1Obj, player2Obj) {
-                if (this.hasTriggeredCombo) return;
-                this.hasTriggeredCombo = true;
-                this.triggerFriendlyCombo();
-            }
-
-            triggerFriendlyCombo() {
-                const targetEnemy = this.enemies.getFirstAlive();
-                if (!targetEnemy) return;
+            // 友情コンボ（レーザー演出）
+            triggerLaserCombo() {
+                if (!this.enemy || this.enemy.getData('hp') <= 0) return;
 
                 const fromX = this.friendlyPlayer.x;
                 const fromY = this.friendlyPlayer.y;
-                const toX = targetEnemy.x;
-                const toY = targetEnemy.y;
+                const toX = this.enemy.x;
+                const toY = this.enemy.y;
 
-                let thickness = 24;
+                // レーザー照射のグラフィックアニメーション
                 this.tweens.addCounter({
-                    from: thickness,
+                    from: 28,
                     to: 0,
-                    duration: 300,
+                    duration: 350,
                     onUpdate: (tween) => {
                         const t = tween.getValue();
                         this.laserGraphics.clear();
                         if (t > 2) {
-                            this.laserGraphics.lineStyle(t, 0x00ff88, 0.4);
+                            // 外光（緑のエフェクト）
+                            this.laserGraphics.lineStyle(t, 0x00ff88, 0.5);
                             this.laserGraphics.lineBetween(fromX, fromY, toX, toY);
-                            this.laserGraphics.lineStyle(t * 0.4, 0xffffff, 0.9);
+                            // 芯（太い白光）
+                            this.laserGraphics.lineStyle(t * 0.4, 0xffffff, 0.95);
                             this.laserGraphics.lineBetween(fromX, fromY, toX, toY);
                         }
                     },
@@ -282,24 +302,29 @@
                     }
                 });
 
-                let currentHp = targetEnemy.getData('hp');
-                currentHp -= CONFIG.FRIENDLY_COMBO_DAMAGE;
-                targetEnemy.setData('hp', currentHp);
-                this.updateHpBar(targetEnemy);
+                // レーザー分のダメージ反映
+                let hp = this.enemy.getData('hp');
+                hp -= CONFIG.COMBO_DAMAGE;
+                this.enemy.setData('hp', hp);
+                this.updateHpBar(this.enemy);
 
-                this.showDamageText(targetEnemy.x, targetEnemy.y, `${CONFIG.FRIENDLY_COMBO_DAMAGE}`, 0x00ff88, true);
-                this.spawnSpark(targetEnemy.x, targetEnemy.y, 0x00ff88);
+                // 特別な友情大ダメージポップアップ
+                this.showDamageText(this.enemy.x, this.enemy.y, `${CONFIG.COMBO_DAMAGE}`, 0x00ff88, true);
+                this.spawnSpark(this.enemy.x, this.enemy.y, 0x00ff88);
             }
 
+            // ==========================================
+            // ターン終了判定と各種演出パーツ
+            // ==========================================
             checkTurnEnd() {
                 let allStopped = true;
 
-                this.players.getChildren().forEach((player) => {
-                    const speed = Phaser.Math.Distance.Between(0, 0, player.body.velocity.x, player.body.velocity.y);
+                this.allCharacters.getChildren().forEach((char) => {
+                    const speed = Phaser.Math.Distance.Between(0, 0, char.body.velocity.x, char.body.velocity.y);
                     if (speed > CONFIG.STOP_SPEED_THRESHOLD) {
                         allStopped = false;
                     } else {
-                        player.setVelocity(0, 0);
+                        char.setVelocity(0, 0);
                     }
                 });
 
@@ -309,46 +334,45 @@
             }
 
             createPlayerTrails() {
-                this.players.getChildren().forEach((player) => {
+                this.allCharacters.getChildren().forEach((char) => {
+                    if (char.getData('type') === 'enemy') return;
+
                     const emitter = this.add.particles(0, 0, 'trail_particle', {
-                        speed: 10,
-                        scale: { start: 0.4, end: 0 },
-                        alpha: { start: 0.5, end: 0 },
+                        speed: 15,
+                        scale: { start: 0.5, end: 0 },
+                        alpha: { start: 0.6, end: 0 },
                         blendMode: 'ADD',
-                        lifespan: 300,
-                        frequency: 15
+                        lifespan: 250,
+                        frequency: 10
                     });
-                    emitter.startFollow(player);
+                    emitter.startFollow(char);
 
                     this.physics.world.on('worldstep', () => {
-                        const speed = Phaser.Math.Distance.Between(0, 0, player.body.velocity.x, player.body.velocity.y);
-                        if (speed < CONFIG.STOP_SPEED_THRESHOLD) {
-                            emitter.stop();
-                        } else {
-                            emitter.start();
-                        }
+                        const speed = Phaser.Math.Distance.Between(0, 0, char.body.velocity.x, char.body.velocity.y);
+                        if (speed < CONFIG.STOP_SPEED_THRESHOLD) emitter.stop();
+                        else emitter.start();
                     });
                 });
             }
 
-            spawnSpark(x, y, color = 0xffaa00) {
+            spawnSpark(x, y, color) {
                 const spark = this.add.particles(x, y, 'trail_particle', {
-                    speed: { min: 80, max: 200 },
+                    speed: { min: 100, max: 250 },
                     angle: { min: 0, max: 360 },
-                    scale: { start: 0.5, end: 0 },
+                    scale: { start: 0.6, end: 0 },
                     alpha: { start: 1, end: 0 },
                     blendMode: 'ADD',
                     lifespan: { min: 200, max: 400 },
-                    maxParticles: 15
+                    maxParticles: 20
                 });
-                spark.setDepth(5);
+                spark.setDepth(6);
             }
 
             showDamageText(x, y, text, color, isBig = false) {
                 const hexColor = '#' + color.toString(16).padStart(6, '0');
                 const damageTxt = this.add.text(x, y, text, {
                     fontFamily: 'Arial Black',
-                    fontSize: isBig ? '36px' : '24px',
+                    fontSize: isBig ? '38px' : '26px',
                     color: hexColor,
                     stroke: '#000000',
                     strokeThickness: 6
@@ -356,10 +380,10 @@
 
                 this.tweens.add({
                     targets: damageTxt,
-                    y: y - 50,
-                    scale: { start: 1.4, end: 1.0 },
+                    y: y - 60,
+                    scale: { start: 1.5, end: 1.0 },
                     alpha: { start: 1, end: 0 },
-                    duration: 600,
+                    duration: 650,
                     ease: 'Back.easeOut',
                     onComplete: () => damageTxt.destroy()
                 });
@@ -374,9 +398,9 @@
                 hpBar.clear();
 
                 const currentHp = Math.max(0, enemy.getData('hp'));
-                const ratio = currentHp / CONFIG.ENEMY_HP;
+                const ratio = currentHp / enemy.getData('maxHp');
 
-                hpBar.fillStyle(0x333333, 0.8);
+                hpBar.fillStyle(0x222222, 0.8);
                 hpBar.fillRect(enemy.x - 50, enemy.y - 65, 100, 8);
 
                 const barColor = ratio > 0.3 ? 0x00ff00 : 0xff3333;
@@ -402,17 +426,13 @@
 
             createGridBackground() {
                 const grid = this.add.graphics();
-                grid.lineStyle(1, 0xffffff, 0.05);
-                for (let x = 0; x < CONFIG.WIDTH; x += 40) {
-                    grid.lineBetween(x, 0, x, CONFIG.HEIGHT);
-                }
-                for (let y = 0; y < CONFIG.HEIGHT; y += 40) {
-                    grid.lineBetween(0, y, CONFIG.WIDTH, y);
-                }
+                grid.lineStyle(1, 0xffffff, 0.04);
+                for (let x = 0; x < CONFIG.WIDTH; x += 40) grid.lineBetween(x, 0, x, CONFIG.HEIGHT);
+                for (let y = 0; y < CONFIG.HEIGHT; y += 40) grid.lineBetween(0, y, CONFIG.WIDTH, y);
             }
         }
 
-        // Phaserゲームの起動設定
+        // ゲーム起動設定
         const config = {
             type: Phaser.AUTO,
             width: CONFIG.WIDTH,
@@ -420,9 +440,7 @@
             parent: 'game-container',
             physics: {
                 default: 'arcade',
-                arcade: {
-                    debug: false
-                }
+                arcade: { debug: false }
             },
             scene: [GameScene]
         };
