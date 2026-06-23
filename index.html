@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>最高クオリティ ひっぱりアクション プロトタイプ</title>
+    <title>最高クオリティ ひっぱりアクション 修正版</title>
     <style>
         body {
             margin: 0;
@@ -34,19 +34,19 @@
             WIDTH: 540,
             HEIGHT: 960,
             BOUNCE: 0.98,          // 跳ね返り係数（1.0に近づくほど勢いが死なない）
-            DRAG: 4,               // 空気抵抗（低いほど減速しにくい）
+            DRAG: 15,              // 空気抵抗（確実に止まるように少し高めに調整）
             MAX_PULL: 150,         // 引っ張り上限距離(px)
             LAUNCH_POWER: 4.5,     // 発射速度倍率
-            STOP_SPEED_THRESHOLD: 12, // この速度以下になったら停止とみなす
+            STOP_SPEED_THRESHOLD: 15, // この速度以下になったら強制停止して次のターンへ
             
             // 演出関連
-            HIT_STOP_DURATION: 60, // ヒットストップの時間 (ミリ秒)
-            SHAKE_INTENSITY: 0.01, // 画面揺れの強さ
-            SHAKE_DURATION: 120,   // 画面揺れの時間 (ミリ秒)
+            HIT_STOP_DURATION: 50, // ヒットストップの時間 (ミリ秒)
+            SHAKE_INTENSITY: 0.008, // 画面揺れの強さ
+            SHAKE_DURATION: 100,   // 画面揺れの時間 (ミリ秒)
 
             // バランス・ダメージ
-            BASE_DAMAGE: 150,      // 通常衝突時の基本ダメージ
-            COMBO_DAMAGE: 500      // 友情コンボ（レーザー）のダメージ
+            BASE_DAMAGE: 150,      
+            COMBO_DAMAGE: 500      
         };
 
         class GameScene extends Phaser.Scene {
@@ -60,7 +60,6 @@
             }
 
             preload() {
-                // テクスチャの動的生成（アセット画像不要）
                 this.createCircleTexture('player_main', 24, 0x00aaff, 0xffffff); // 自機（青）
                 this.createCircleTexture('player_sub', 24, 0x00ff88, 0xffffff);  // 仲間（緑）
                 this.createCircleTexture('enemy', 40, 0xff3333, 0xffbb00);      // 敵（赤）
@@ -68,15 +67,13 @@
             }
 
             create() {
-                // 背景・グリッド
                 this.add.rectangle(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT, 0x121225).setOrigin(0);
                 this.createGridBackground();
 
-                // 物理演算世界の設定
                 this.physics.world.setBounds(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
                 this.physics.world.gravity.set(0, 0);
 
-                // 全キャラクター用グループの作成
+                // 全キャラクター用グループ
                 this.allCharacters = this.physics.add.group({
                     bounceX: CONFIG.BOUNCE,
                     bounceY: CONFIG.BOUNCE,
@@ -85,61 +82,54 @@
                     collideWorldBounds: true
                 });
 
-                // 各種グラフィックスの初期化
                 this.trajectoryGraphics = this.add.graphics();
                 this.laserGraphics = this.add.graphics().setDepth(10);
 
-                // キャラクターの配置と初期化
                 this.spawnCharacters();
 
-                // 総当たり衝突判定（すべてのキャラが独立してぶつかり合う）
+                // 総当たり衝突判定
                 this.physics.add.collider(this.allCharacters, this.allCharacters, this.onHandleCollision, undefined, this);
 
-                // マウス/タッチイベント
+                // タッチイベント
                 this.input.on('pointerdown', this.onDragStart, this);
                 this.input.on('pointermove', this.onDragMove, this);
                 this.input.on('pointerup', this.onDragEnd, this);
 
-                // 残像トレイルエフェクトの開始
                 this.createPlayerTrails();
             }
 
             update() {
-                // ターン中の全オブジェクトの停止監視
+                // ターンアクティブ時のみ停止チェックを行う
                 if (this.isTurnActive && !this.hitStopping) {
                     this.checkTurnEnd();
                 }
             }
 
             spawnCharacters() {
-                // 1. 自機
                 this.currentPlayer = this.allCharacters.create(CONFIG.WIDTH / 2, CONFIG.HEIGHT - 150, 'player_main');
                 this.currentPlayer.setCircle(24);
                 this.currentPlayer.setData('type', 'player');
 
-                // 2. 独立したもう一人の味方
                 this.friendlyPlayer = this.allCharacters.create(CONFIG.WIDTH / 2 - 120, CONFIG.HEIGHT - 300, 'player_sub');
                 this.friendlyPlayer.setCircle(24);
                 this.friendlyPlayer.setData('type', 'player');
 
-                // 3. 敵（今回はぶつかったらリアルに動くように固定解除）
                 this.enemy = this.allCharacters.create(CONFIG.WIDTH / 2, 250, 'enemy');
                 this.enemy.setCircle(40);
                 this.enemy.setData('type', 'enemy');
                 this.enemy.setData('maxHp', 5000);
                 this.enemy.setData('hp', 5000);
-                this.enemy.setMass(3); // 敵は少し重くして手応えを出す
+                this.enemy.setMass(2); // 少し重めにして弾きごたえを出す
 
                 this.updateHpBar(this.enemy);
             }
 
             // ==========================================
-            // 引っ張り操作ロジック
+            // 引っ張り操作
             // ==========================================
             onDragStart(pointer) {
-                if (this.isTurnActive) return;
+                if (this.isTurnActive) return; // ターン中（移動中）は引っ張れない
 
-                // 自機のタップ判定（少し遊びを持たせる）
                 const dist = Phaser.Math.Distance.Between(pointer.x, pointer.y, this.currentPlayer.x, this.currentPlayer.y);
                 if (dist < 60) {
                     this.isDragging = true;
@@ -166,7 +156,6 @@
                 const launchAngle = Phaser.Math.Angle.Between(0, 0, -dx, -dy);
                 const ratio = distance / CONFIG.MAX_PULL;
                 
-                // 引っ張る長さで色を変化（青 ➔ 黄 ➔ 赤）
                 let color = 0x00aaff;
                 if (ratio > 0.7) color = 0xff3333;
                 else if (ratio > 0.3) color = 0xffaa00;
@@ -176,7 +165,6 @@
                 const endX = startX + Math.cos(launchAngle) * distance;
                 const endY = startY + Math.sin(launchAngle) * distance;
 
-                // ガイドラインと矢印先端の描画
                 this.trajectoryGraphics.lineStyle(6, color, 0.8);
                 this.trajectoryGraphics.lineBetween(startX, startY, endX, endY);
                 this.trajectoryGraphics.fillStyle(color, 1);
@@ -196,7 +184,7 @@
                 let dx = pointer.x - this.dragStartPoint.x;
                 let dy = pointer.y - this.dragStartPoint.y;
 
-                if (Phaser.Math.Distance.Between(0, 0, dx, dy) < 10) return; // 微小なドラッグはキャンセル
+                if (Phaser.Math.Distance.Between(0, 0, dx, dy) < 10) return;
 
                 if (Phaser.Math.Distance.Between(0, 0, dx, dy) > CONFIG.MAX_PULL) {
                     const angle = Phaser.Math.Angle.Between(0, 0, dx, dy);
@@ -204,20 +192,28 @@
                     dy = Math.sin(angle) * CONFIG.MAX_PULL;
                 }
 
-                // 物理ベクトルの適用（引っ張りと逆方向へ発射）
+                // 発射
                 this.currentPlayer.setVelocity(-dx * CONFIG.LAUNCH_POWER, -dy * CONFIG.LAUNCH_POWER);
                 this.isTurnActive = true;
                 this.hasTriggeredCombo = false;
             }
 
             // ==========================================
-            // 総当たり衝突ハンドラー（エフェクトの核心）
+            // 衝突判定 & めり込み(くっつき)防止
             // ==========================================
             onHandleCollision(obj1, obj2) {
                 const type1 = obj1.getData('type');
                 const type2 = obj2.getData('type');
 
-                // 1. 味方同士の衝突（友情コンボ発動）
+                // くっつき(密着スタック)防止のための強制位置離し処理
+                const angle = Phaser.Math.Angle.Between(obj2.x, obj2.y, obj1.x, obj1.y);
+                // 衝突直後に互いを1ピクセルずつ外側に押し出す
+                obj1.x += Math.cos(angle) * 1.5;
+                obj1.y += Math.sin(angle) * 1.5;
+                obj2.x -= Math.cos(angle) * 1.5;
+                obj2.y -= Math.sin(angle) * 1.5;
+
+                // 1. 味方同士の衝突（友情コンボ）
                 if (type1 === 'player' && type2 === 'player') {
                     if (!this.hasTriggeredCombo) {
                         this.hasTriggeredCombo = true;
@@ -225,7 +221,7 @@
                     }
                 }
                 
-                // 2. プレイヤーと敵の衝突（どちらがobj1/obj2でも対応）
+                // 2. プレイヤーと敵の衝突
                 if ((type1 === 'player' && type2 === 'enemy') || (type1 === 'enemy' && type2 === 'player')) {
                     const enemyObj = (type1 === 'enemy') ? obj1 : obj2;
                     const playerObj = (type1 === 'player') ? obj1 : obj2;
@@ -234,28 +230,24 @@
                 }
             }
 
-            // 通常衝突ダメージ＆豪華演出
             processDamage(player, enemy) {
                 if (this.hitStopping) return;
 
-                // 火花エフェクトを衝突点の中心に発生
                 const contactX = (player.x + enemy.x) / 2;
                 const contactY = (player.y + enemy.y) / 2;
                 this.spawnSpark(contactX, contactY, 0xffaa00);
 
-                // HP減少とポップアップテキスト
                 let hp = enemy.getData('hp');
                 hp -= CONFIG.BASE_DAMAGE;
                 enemy.setData('hp', hp);
                 this.updateHpBar(enemy);
                 this.showDamageText(enemy.x, enemy.y - 40, CONFIG.BASE_DAMAGE.toString(), 0xffffff);
 
-                // 最高クオリティ：ヒットストップ & 画面シェイク
+                // ヒットストップ
                 this.hitStopping = true;
                 const pVel = player.body.velocity.clone();
                 const eVel = enemy.body.velocity.clone();
 
-                // 一瞬だけ全物理速度をゼロにして停止感を出す
                 player.setVelocity(0, 0);
                 enemy.setVelocity(0, 0);
                 this.physics.world.pause();
@@ -264,14 +256,18 @@
 
                 this.time.delayedCall(CONFIG.HIT_STOP_DURATION, () => {
                     this.physics.world.resume();
-                    // 物理演算再開時に反発を維持して速度を再適用
-                    player.setVelocity(pVel.x * -CONFIG.BOUNCE, pVel.y * -CONFIG.BOUNCE);
-                    enemy.setVelocity(eVel.x * CONFIG.BOUNCE, eVel.y * CONFIG.BOUNCE);
+                    
+                    // 確実に反発ベクトルが生まれるように設定
+                    const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y);
+                    const speed = Math.max(pVel.length() * CONFIG.BOUNCE, 150); // 最低反発速度を保証
+                    
+                    player.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+                    enemy.setVelocity(-Math.cos(angle) * speed * 0.3, -Math.sin(angle) * speed * 0.3);
+                    
                     this.hitStopping = false;
                 });
             }
 
-            // 友情コンボ（レーザー演出）
             triggerLaserCombo() {
                 if (!this.enemy || this.enemy.getData('hp') <= 0) return;
 
@@ -280,7 +276,6 @@
                 const toX = this.enemy.x;
                 const toY = this.enemy.y;
 
-                // レーザー照射のグラフィックアニメーション
                 this.tweens.addCounter({
                     from: 28,
                     to: 0,
@@ -289,10 +284,8 @@
                         const t = tween.getValue();
                         this.laserGraphics.clear();
                         if (t > 2) {
-                            // 外光（緑のエフェクト）
                             this.laserGraphics.lineStyle(t, 0x00ff88, 0.5);
                             this.laserGraphics.lineBetween(fromX, fromY, toX, toY);
-                            // 芯（太い白光）
                             this.laserGraphics.lineStyle(t * 0.4, 0xffffff, 0.95);
                             this.laserGraphics.lineBetween(fromX, fromY, toX, toY);
                         }
@@ -302,25 +295,25 @@
                     }
                 });
 
-                // レーザー分のダメージ反映
                 let hp = this.enemy.getData('hp');
                 hp -= CONFIG.COMBO_DAMAGE;
                 this.enemy.setData('hp', hp);
                 this.updateHpBar(this.enemy);
 
-                // 特別な友情大ダメージポップアップ
                 this.showDamageText(this.enemy.x, this.enemy.y, `${CONFIG.COMBO_DAMAGE}`, 0x00ff88, true);
                 this.spawnSpark(this.enemy.x, this.enemy.y, 0x00ff88);
             }
 
             // ==========================================
-            // ターン終了判定と各種演出パーツ
+            // 確実なターン終了判定ロジック
             // ==========================================
             checkTurnEnd() {
                 let allStopped = true;
 
                 this.allCharacters.getChildren().forEach((char) => {
                     const speed = Phaser.Math.Distance.Between(0, 0, char.body.velocity.x, char.body.velocity.y);
+                    
+                    // スピードが閾値を下回ったら完全に速度を0にする
                     if (speed > CONFIG.STOP_SPEED_THRESHOLD) {
                         allStopped = false;
                     } else {
@@ -328,6 +321,7 @@
                     }
                 });
 
+                // 全員が完全に止まったら、次のターン（引っ張り可能状態）へ移行
                 if (allStopped) {
                     this.isTurnActive = false;
                 }
@@ -432,7 +426,6 @@
             }
         }
 
-        // ゲーム起動設定
         const config = {
             type: Phaser.AUTO,
             width: CONFIG.WIDTH,
@@ -449,4 +442,3 @@
     </script>
 </body>
 </html>
-
