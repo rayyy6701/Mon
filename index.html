@@ -487,3 +487,27 @@
                 graphic.fillCircle(4, 4, 4);
                 graphic.generateTexture('trail_particle', 8, 8);
             }
+createGridBackground() {
+                const grid = this.add.graphics();
+                grid.lineStyle(1, 0xffffff, 0.04);
+                for (let x = 0; x < CONFIG.WIDTH; x += 40) grid.lineBetween(x, 0, x, CONFIG.HEIGHT);
+                for (let y = 0; y < CONFIG.HEIGHT; y += 40) grid.lineBetween(0, y, CONFIG.WIDTH, y);
+            }
+        }
+
+        const config = {
+            type: Phaser.AUTO,
+            width: CONFIG.WIDTH,
+            height: CONFIG.HEIGHT,
+            parent: 'game-container',
+            physics: {
+                default: 'arcade',
+                arcade: { debug: false }
+            },
+            scene: [GameScene]
+        };
+
+        new Phaser.Game(config);
+    </script>
+</body>
+</html>
